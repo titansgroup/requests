@@ -49,7 +49,7 @@ __license__ = 'Apache 2.0'
 __copyright__ = 'Copyright 2013 Kenneth Reitz'
 
 
-from . import utils
+import utils
 from .models import Request, Response, PreparedRequest
 from .api import request, get, head, post, patch, put, delete, options
 from .sessions import session, Session
