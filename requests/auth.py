@@ -18,7 +18,6 @@ from base64 import b64encode
 from .compat import urlparse, str
 from .utils import parse_dict_header
 
-
 log = logging.getLogger(__name__)
 
 CONTENT_TYPE_FORM_URLENCODED = 'application/x-www-form-urlencoded'
@@ -106,7 +105,9 @@ class HTTPDigestAuth(AuthBase):
         A1 = '%s:%s:%s' % (self.username, realm, self.password)
         A2 = '%s:%s' % (method, path)
 
-        if qop == 'auth':
+        if qop is None:
+            respdig = KD(hash_utf8(A1), "%s:%s" % (nonce, hash_utf8(A2)))
+        elif qop == 'auth' or 'auth' in qop.split(','):
             if nonce == self.last_nonce:
                 self.nonce_count += 1
             else:
@@ -121,8 +122,6 @@ class HTTPDigestAuth(AuthBase):
             cnonce = (hashlib.sha1(s).hexdigest()[:16])
             noncebit = "%s:%s:%s:%s:%s" % (nonce, ncvalue, cnonce, qop, hash_utf8(A2))
             respdig = KD(hash_utf8(A1), noncebit)
-        elif qop is None:
-            respdig = KD(hash_utf8(A1), "%s:%s" % (nonce, hash_utf8(A2)))
         else:
             # XXX handle auth-int.
             return None
@@ -153,16 +152,20 @@ class HTTPDigestAuth(AuthBase):
 
             setattr(self, 'num_401_calls', num_401_calls + 1)
             pat = re.compile(r'digest ', flags=re.IGNORECASE)
-            self.chal = parse_dict_header(pat.sub('', s_auth))
+            self.chal = parse_dict_header(pat.sub('', s_auth, count=1))
 
             # Consume content and release the original connection
             # to allow our new request to reuse the same one.
             r.content
             r.raw.release_conn()
+            prep = r.request.copy()
+            prep.prepare_cookies(r.cookies)
 
-            r.request.headers['Authorization'] = self.build_digest_header(r.request.method, r.request.url)
-            _r = r.connection.send(r.request, **kwargs)
+            prep.headers['Authorization'] = self.build_digest_header(
+                prep.method, prep.url)
+            _r = r.connection.send(prep, **kwargs)
             _r.history.append(r)
+            _r.request = prep
 
             return _r
 

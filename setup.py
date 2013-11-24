@@ -20,6 +20,7 @@ packages = [
     'requests.packages.charade',
     'requests.packages.urllib3',
     'requests.packages.urllib3.packages',
+    'requests.packages.urllib3.contrib',
     'requests.packages.urllib3.packages.ssl_match_hostname'
 ]
 
@@ -39,7 +40,6 @@ setup(
     package_dir={'requests': 'requests'},
     include_package_data=True,
     install_requires=requires,
-    setup_requires=['sphinx'],
     license=open('LICENSE').read(),
     zip_safe=False,
     classifiers=(
@@ -51,9 +51,7 @@ setup(
         'Programming Language :: Python :: 2.6',
         'Programming Language :: Python :: 2.7',
         'Programming Language :: Python :: 3',
-        # 'Programming Language :: Python :: 3.0',
-        'Programming Language :: Python :: 3.1',
-        'Programming Language :: Python :: 3.2',
         'Programming Language :: Python :: 3.3',
+
     ),
 )

@@ -123,3 +123,20 @@ Patches and Suggestions
 - Denis Ryzhkov <denisr@denisr.com>
 - Wilfred Hughes <me@wilfred.me.uk> @dontYetKnow
 - Dmitry Medvinsky <me@dmedvinsky.name>
+- Bryce Boe <bbzbryce@gmail.com> @bboe
+- Colin Dunklau <colin.dunklau@gmail.com> @cdunklau
+- Bob Carroll <bob.carroll@alum.rit.edu> @rcarz
+- Hugo Osvaldo Barrera <hugo@osvaldobarrera.com.ar> @hobarrera
+- Łukasz Langa <lukasz@langa.pl> @llanga
+- Dave Shawley <daveshawley@gmail.com>
+- James Clarke (jam)
+- Kevin Burke <kev@inburke.com>
+- Flavio Curella
+- David Pursehouse <david.pursehouse@gmail.com> @dpursehouse
+- Jon Parise
+- Alexander Karpinsky @homm86
+- Marc Schlaich @schlamar
+- Park Ilsu <daftonshady@gmail.com> @daftshady
+- Matt Spitz @mattspitz
+- Vikram Oberoi @voberoi
+- Can Ibanoglu <can.ibanoglu@gmail.com> @canibanoglu

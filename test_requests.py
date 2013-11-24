@@ -10,8 +10,13 @@ import unittest
 import pickle
 
 import requests
+import pytest
 from requests.auth import HTTPDigestAuth
-from requests.compat import str
+from requests.adapters import HTTPAdapter
+from requests.compat import str, cookielib, getproxies, urljoin, urlparse
+from requests.cookies import cookiejar_from_dict
+from requests.exceptions import InvalidURL, MissingSchema
+from requests.structures import CaseInsensitiveDict
 
 try:
     import StringIO
@@ -19,11 +24,13 @@ except ImportError:
     import io as StringIO
 
 HTTPBIN = os.environ.get('HTTPBIN_URL', 'http://httpbin.org/')
+# Issue #1483: Make sure the URL always has a trailing slash
+HTTPBIN = HTTPBIN.rstrip('/') + '/'
 
 
 def httpbin(*suffix):
     """Returns url for HTTPBIN resource."""
-    return HTTPBIN + '/'.join(suffix)
+    return urljoin(HTTPBIN, '/'.join(suffix))
 
 
 class RequestsTestCase(unittest.TestCase):
@@ -50,7 +57,8 @@ class RequestsTestCase(unittest.TestCase):
         requests.post
 
     def test_invalid_url(self):
-        self.assertRaises(ValueError, requests.get, 'hiwpefhipowhefopw')
+        self.assertRaises(MissingSchema, requests.get, 'hiwpefhipowhefopw')
+        self.assertRaises(InvalidURL, requests.get, 'http://')
 
     def test_basic_building(self):
         req = requests.Request()
@@ -82,9 +90,23 @@ class RequestsTestCase(unittest.TestCase):
         self.assertEqual(request.url,
             "http://example.com/path?key=value&a=b#fragment")
 
+    def test_mixed_case_scheme_acceptable(self):
+        s = requests.Session()
+        s.proxies = getproxies()
+        parts = urlparse(httpbin('get'))
+        schemes = ['http://', 'HTTP://', 'hTTp://', 'HttP://',
+                   'https://', 'HTTPS://', 'hTTps://', 'HttPs://']
+        for scheme in schemes:
+            url = scheme + parts.netloc + parts.path
+            r = requests.Request('GET', url)
+            r = s.send(r.prepare())
+            self.assertEqual(r.status_code, 200,
+                             "failed for scheme %s" % scheme)
+
     def test_HTTP_200_OK_GET_ALTERNATIVE(self):
         r = requests.Request('GET', httpbin('get'))
         s = requests.Session()
+        s.proxies = getproxies()
 
         r = s.send(r.prepare())
 
@@ -137,6 +159,42 @@ class RequestsTestCase(unittest.TestCase):
         )
         assert 'foo' not in s.cookies
 
+    def test_cookie_quote_wrapped(self):
+        s = requests.session()
+        s.get(httpbin('cookies/set?foo="bar:baz"'))
+        self.assertTrue(s.cookies['foo'] == '"bar:baz"')
+
+    def test_cookie_persists_via_api(self):
+        s = requests.session()
+        r = s.get(httpbin('redirect/1'), cookies={'foo':'bar'})
+        self.assertTrue('foo' in r.request.headers['Cookie'])
+        self.assertTrue('foo' in r.history[0].request.headers['Cookie'])
+
+    def test_request_cookie_overrides_session_cookie(self):
+        s = requests.session()
+        s.cookies['foo'] = 'bar'
+        r = s.get(httpbin('cookies'), cookies={'foo': 'baz'})
+        assert r.json()['cookies']['foo'] == 'baz'
+        # Session cookie should not be modified
+        assert s.cookies['foo'] == 'bar'
+
+    def test_generic_cookiejar_works(self):
+        cj = cookielib.CookieJar()
+        cookiejar_from_dict({'foo': 'bar'}, cj)
+        s = requests.session()
+        s.cookies = cj
+        r = s.get(httpbin('cookies'))
+        # Make sure the cookie was sent
+        assert r.json()['cookies']['foo'] == 'bar'
+        # Make sure the session cj is still the custom one
+        assert s.cookies is cj
+
+    def test_requests_in_history_are_not_overridden(self):
+        resp = requests.get(httpbin('redirect/3'))
+        urls = [r.url for r in resp.history]
+        req_urls = [r.request.url for r in resp.history]
+        self.assertEquals(urls, req_urls)
+
     def test_user_agent_transfers(self):
 
         heads = {
@@ -176,6 +234,34 @@ class RequestsTestCase(unittest.TestCase):
         r = s.get(url)
         self.assertEqual(r.status_code, 200)
 
+    def test_basicauth_with_netrc(self):
+        auth = ('user', 'pass')
+        wrong_auth = ('wronguser', 'wrongpass')
+        url = httpbin('basic-auth', 'user', 'pass')
+
+        def get_netrc_auth_mock(url):
+            return auth
+        requests.sessions.get_netrc_auth = get_netrc_auth_mock
+
+        # Should use netrc and work.
+        r = requests.get(url)
+        self.assertEqual(r.status_code, 200)
+
+        # Given auth should override and fail.
+        r = requests.get(url, auth=wrong_auth)
+        self.assertEqual(r.status_code, 401)
+
+        s = requests.session()
+
+        # Should use netrc and work.
+        r = s.get(url)
+        self.assertEqual(r.status_code, 200)
+
+        # Given auth should override and fail.
+        s.auth = wrong_auth
+        r = s.get(url)
+        self.assertEqual(r.status_code, 401)
+
     def test_DIGEST_HTTP_200_OK_GET(self):
 
         auth = HTTPDigestAuth('user', 'pass')
@@ -188,9 +274,25 @@ class RequestsTestCase(unittest.TestCase):
         self.assertEqual(r.status_code, 401)
 
         s = requests.session()
-        s.auth = auth
+        s.auth = HTTPDigestAuth('user', 'pass')
         r = s.get(url)
         self.assertEqual(r.status_code, 200)
+
+    def test_DIGEST_AUTH_RETURNS_COOKIE(self):
+        url = httpbin('digest-auth', 'auth', 'user', 'pass')
+        auth = HTTPDigestAuth('user', 'pass')
+        r = requests.get(url)
+        assert r.cookies['fake'] == 'fake_value'
+
+        r = requests.get(url, auth=auth)
+        assert r.status_code == 200
+
+    def test_DIGEST_AUTH_SETS_SESSION_COOKIES(self):
+        url = httpbin('digest-auth', 'auth', 'user', 'pass')
+        auth = HTTPDigestAuth('user', 'pass')
+        s = requests.Session()
+        s.get(url, auth=auth)
+        assert s.cookies['fake'] == 'fake_value'
 
     def test_DIGEST_STREAM(self):
 
@@ -260,6 +362,12 @@ class RequestsTestCase(unittest.TestCase):
         except ValueError:
             pass
 
+    def test_conflicting_post_params(self):
+        url = httpbin('post')
+        with open('requirements.txt') as f:
+            pytest.raises(ValueError, "requests.post(url, data='[{\"some\": \"data\"}]', files={'some': f})")
+            pytest.raises(ValueError, "requests.post(url, data=u'[{\"some\": \"data\"}]', files={'some': f})")
+
     def test_request_ok_set(self):
         r = requests.get(httpbin('status', '404'))
         self.assertEqual(r.ok, False)
@@ -320,6 +428,17 @@ class RequestsTestCase(unittest.TestCase):
                           files={'file': ('test_requests.py', open(__file__, 'rb'))})
         self.assertEqual(r.status_code, 200)
 
+    def test_unicode_multipart_post_fieldnames(self):
+        filename = os.path.splitext(__file__)[0] + '.py'
+        r = requests.Request(method='POST',
+                             url=httpbin('post'),
+                             data={'stuff'.encode('utf-8'): 'elixr'},
+                             files={'file': ('test_requests.py',
+                                             open(filename, 'rb'))})
+        prep = r.prepare()
+        self.assertTrue(b'name="stuff"' in prep.body)
+        self.assertFalse(b'name="b\'stuff\'"' in prep.body)
+
     def test_custom_content_type(self):
         r = requests.post(httpbin('post'),
                           data={'stuff': json.dumps({'a': 123})},
@@ -345,9 +464,27 @@ class RequestsTestCase(unittest.TestCase):
         prep = req.prepare()
 
         s = requests.Session()
+        s.proxies = getproxies()
         resp = s.send(prep)
 
         self.assertTrue(hasattr(resp, 'hook_working'))
+
+    def test_prepared_from_session(self):
+        class DummyAuth(requests.auth.AuthBase):
+            def __call__(self, r):
+                r.headers['Dummy-Auth-Test'] = 'dummy-auth-test-ok'
+                return r
+
+        req = requests.Request('GET', httpbin('headers'))
+        self.assertEqual(req.auth, None)
+
+        s = requests.Session()
+        s.auth = DummyAuth()
+
+        prep = s.prepare_request(req)
+        resp = s.send(prep)
+
+        self.assertTrue(resp.json()['headers']['Dummy-Auth-Test'], 'dummy-auth-test-ok')
 
     def test_links(self):
         r = requests.Response()
@@ -434,10 +571,328 @@ class RequestsTestCase(unittest.TestCase):
         s = requests.Session()
 
         s = pickle.loads(pickle.dumps(s))
+        s.proxies = getproxies()
 
         r = s.send(r.prepare())
         self.assertEqual(r.status_code, 200)
 
+    def test_fixes_1329(self):
+        """
+        Ensure that header updates are done case-insensitively.
+        """
+        s = requests.Session()
+        s.headers.update({'ACCEPT': 'BOGUS'})
+        s.headers.update({'accept': 'application/json'})
+        r = s.get(httpbin('get'))
+        headers = r.request.headers
+        self.assertEqual(
+            headers['accept'],
+            'application/json'
+        )
+        self.assertEqual(
+            headers['Accept'],
+            'application/json'
+        )
+        self.assertEqual(
+            headers['ACCEPT'],
+            'application/json'
+        )
+
+    def test_uppercase_scheme_redirect(self):
+        parts = urlparse(httpbin('html'))
+        url = "HTTP://" + parts.netloc + parts.path
+        r = requests.get(httpbin('redirect-to'), params={'url': url})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.url.lower(), url.lower())
+
+    def test_transport_adapter_ordering(self):
+        s = requests.Session()
+        order = ['https://', 'http://']
+        self.assertEqual(order, list(s.adapters))
+        s.mount('http://git', HTTPAdapter())
+        s.mount('http://github', HTTPAdapter())
+        s.mount('http://github.com', HTTPAdapter())
+        s.mount('http://github.com/about/', HTTPAdapter())
+        order = [
+            'http://github.com/about/',
+            'http://github.com',
+            'http://github',
+            'http://git',
+            'https://',
+            'http://',
+        ]
+        self.assertEqual(order, list(s.adapters))
+        s.mount('http://gittip', HTTPAdapter())
+        s.mount('http://gittip.com', HTTPAdapter())
+        s.mount('http://gittip.com/about/', HTTPAdapter())
+        order = [
+            'http://github.com/about/',
+            'http://gittip.com/about/',
+            'http://github.com',
+            'http://gittip.com',
+            'http://github',
+            'http://gittip',
+            'http://git',
+            'https://',
+            'http://',
+        ]
+        self.assertEqual(order, list(s.adapters))
+        s2 = requests.Session()
+        s2.adapters = {'http://': HTTPAdapter()}
+        s2.mount('https://', HTTPAdapter())
+        self.assertTrue('http://' in s2.adapters)
+        self.assertTrue('https://' in s2.adapters)
+
+    def test_header_remove_is_case_insensitive(self):
+        # From issue #1321
+        s = requests.Session()
+        s.headers['foo'] = 'bar'
+        r = s.get(httpbin('get'), headers={'FOO': None})
+        assert 'foo' not in r.request.headers
+
+    def test_params_are_merged_case_sensitive(self):
+        s = requests.Session()
+        s.params['foo'] = 'bar'
+        r = s.get(httpbin('get'), params={'FOO': 'bar'})
+        assert r.json()['args'] == {'foo': 'bar', 'FOO': 'bar'}
+
+
+    def test_long_authinfo_in_url(self):
+        url = 'http://{0}:{1}@{2}:9000/path?query#frag'.format(
+            'E8A3BE87-9E3F-4620-8858-95478E385B5B',
+            'EA770032-DA4D-4D84-8CE9-29C6D910BF1E',
+            'exactly-------------sixty-----------three------------characters',
+        )
+        r = requests.Request('GET', url).prepare()
+        self.assertEqual(r.url, url)
+
+    def test_header_keys_are_native(self):
+        headers = {u'unicode': 'blah', 'byte'.encode('ascii'): 'blah'}
+        r = requests.Request('GET', httpbin('get'), headers=headers)
+        p = r.prepare()
+
+        # This is testing that they are builtin strings. A bit weird, but there
+        # we go.
+        self.assertTrue('unicode' in p.headers.keys())
+        self.assertTrue('byte' in p.headers.keys())
+
+    def test_can_send_nonstring_objects_with_files(self):
+        data = {'a': 0.0}
+        files = {'b': 'foo'}
+        r = requests.Request('POST', httpbin('post'), data=data, files=files)
+        p = r.prepare()
+
+        self.assertTrue('multipart/form-data' in p.headers['Content-Type'])
+
+
+class TestContentEncodingDetection(unittest.TestCase):
+
+    def test_none(self):
+        encodings = requests.utils.get_encodings_from_content('')
+        self.assertEqual(len(encodings), 0)
+
+    def test_html_charset(self):
+        """HTML5 meta charset attribute"""
+        content = '<meta charset="UTF-8">'
+        encodings = requests.utils.get_encodings_from_content(content)
+        self.assertEqual(len(encodings), 1)
+        self.assertEqual(encodings[0], 'UTF-8')
+
+    def test_html4_pragma(self):
+        """HTML4 pragma directive"""
+        content = '<meta http-equiv="Content-type" content="text/html;charset=UTF-8">'
+        encodings = requests.utils.get_encodings_from_content(content)
+        self.assertEqual(len(encodings), 1)
+        self.assertEqual(encodings[0], 'UTF-8')
+
+    def test_xhtml_pragma(self):
+        """XHTML 1.x served with text/html MIME type"""
+        content = '<meta http-equiv="Content-type" content="text/html;charset=UTF-8" />'
+        encodings = requests.utils.get_encodings_from_content(content)
+        self.assertEqual(len(encodings), 1)
+        self.assertEqual(encodings[0], 'UTF-8')
+
+    def test_xml(self):
+        """XHTML 1.x served as XML"""
+        content = '<?xml version="1.0" encoding="UTF-8"?>'
+        encodings = requests.utils.get_encodings_from_content(content)
+        self.assertEqual(len(encodings), 1)
+        self.assertEqual(encodings[0], 'UTF-8')
+
+    def test_precedence(self):
+        content = '''
+        <?xml version="1.0" encoding="XML"?>
+        <meta charset="HTML5">
+        <meta http-equiv="Content-type" content="text/html;charset=HTML4" />
+        '''.strip()
+        encodings = requests.utils.get_encodings_from_content(content)
+        self.assertEqual(encodings, ['HTML5', 'HTML4', 'XML'])
+
+
+class TestCaseInsensitiveDict(unittest.TestCase):
+
+    def test_mapping_init(self):
+        cid = CaseInsensitiveDict({'Foo': 'foo','BAr': 'bar'})
+        self.assertEqual(len(cid), 2)
+        self.assertTrue('foo' in cid)
+        self.assertTrue('bar' in cid)
+
+    def test_iterable_init(self):
+        cid = CaseInsensitiveDict([('Foo', 'foo'), ('BAr', 'bar')])
+        self.assertEqual(len(cid), 2)
+        self.assertTrue('foo' in cid)
+        self.assertTrue('bar' in cid)
+
+    def test_kwargs_init(self):
+        cid = CaseInsensitiveDict(FOO='foo', BAr='bar')
+        self.assertEqual(len(cid), 2)
+        self.assertTrue('foo' in cid)
+        self.assertTrue('bar' in cid)
+
+    def test_docstring_example(self):
+        cid = CaseInsensitiveDict()
+        cid['Accept'] = 'application/json'
+        self.assertEqual(cid['aCCEPT'], 'application/json')
+        self.assertEqual(list(cid), ['Accept'])
+
+    def test_len(self):
+        cid = CaseInsensitiveDict({'a': 'a', 'b': 'b'})
+        cid['A'] = 'a'
+        self.assertEqual(len(cid), 2)
+
+    def test_getitem(self):
+        cid = CaseInsensitiveDict({'Spam': 'blueval'})
+        self.assertEqual(cid['spam'], 'blueval')
+        self.assertEqual(cid['SPAM'], 'blueval')
+
+    def test_fixes_649(self):
+        """__setitem__ should behave case-insensitively."""
+        cid = CaseInsensitiveDict()
+        cid['spam'] = 'oneval'
+        cid['Spam'] = 'twoval'
+        cid['sPAM'] = 'redval'
+        cid['SPAM'] = 'blueval'
+        self.assertEqual(cid['spam'], 'blueval')
+        self.assertEqual(cid['SPAM'], 'blueval')
+        self.assertEqual(list(cid.keys()), ['SPAM'])
+
+    def test_delitem(self):
+        cid = CaseInsensitiveDict()
+        cid['Spam'] = 'someval'
+        del cid['sPam']
+        self.assertFalse('spam' in cid)
+        self.assertEqual(len(cid), 0)
+
+    def test_contains(self):
+        cid = CaseInsensitiveDict()
+        cid['Spam'] = 'someval'
+        self.assertTrue('Spam' in cid)
+        self.assertTrue('spam' in cid)
+        self.assertTrue('SPAM' in cid)
+        self.assertTrue('sPam' in cid)
+        self.assertFalse('notspam' in cid)
+
+    def test_get(self):
+        cid = CaseInsensitiveDict()
+        cid['spam'] = 'oneval'
+        cid['SPAM'] = 'blueval'
+        self.assertEqual(cid.get('spam'), 'blueval')
+        self.assertEqual(cid.get('SPAM'), 'blueval')
+        self.assertEqual(cid.get('sPam'), 'blueval')
+        self.assertEqual(cid.get('notspam', 'default'), 'default')
+
+    def test_update(self):
+        cid = CaseInsensitiveDict()
+        cid['spam'] = 'blueval'
+        cid.update({'sPam': 'notblueval'})
+        self.assertEqual(cid['spam'], 'notblueval')
+        cid = CaseInsensitiveDict({'Foo': 'foo','BAr': 'bar'})
+        cid.update({'fOO': 'anotherfoo', 'bAR': 'anotherbar'})
+        self.assertEqual(len(cid), 2)
+        self.assertEqual(cid['foo'], 'anotherfoo')
+        self.assertEqual(cid['bar'], 'anotherbar')
+
+    def test_update_retains_unchanged(self):
+        cid = CaseInsensitiveDict({'foo': 'foo', 'bar': 'bar'})
+        cid.update({'foo': 'newfoo'})
+        self.assertEquals(cid['bar'], 'bar')
+
+    def test_iter(self):
+        cid = CaseInsensitiveDict({'Spam': 'spam', 'Eggs': 'eggs'})
+        keys = frozenset(['Spam', 'Eggs'])
+        self.assertEqual(frozenset(iter(cid)), keys)
+
+    def test_equality(self):
+        cid = CaseInsensitiveDict({'SPAM': 'blueval', 'Eggs': 'redval'})
+        othercid = CaseInsensitiveDict({'spam': 'blueval', 'eggs': 'redval'})
+        self.assertEqual(cid, othercid)
+        del othercid['spam']
+        self.assertNotEqual(cid, othercid)
+        self.assertEqual(cid, {'spam': 'blueval', 'eggs': 'redval'})
+
+    def test_setdefault(self):
+        cid = CaseInsensitiveDict({'Spam': 'blueval'})
+        self.assertEqual(
+            cid.setdefault('spam', 'notblueval'),
+            'blueval'
+        )
+        self.assertEqual(
+            cid.setdefault('notspam', 'notblueval'),
+            'notblueval'
+        )
+
+    def test_lower_items(self):
+        cid = CaseInsensitiveDict({
+            'Accept': 'application/json',
+            'user-Agent': 'requests',
+        })
+        keyset = frozenset(lowerkey for lowerkey, v in cid.lower_items())
+        lowerkeyset = frozenset(['accept', 'user-agent'])
+        self.assertEqual(keyset, lowerkeyset)
+
+    def test_preserve_key_case(self):
+        cid = CaseInsensitiveDict({
+            'Accept': 'application/json',
+            'user-Agent': 'requests',
+        })
+        keyset = frozenset(['Accept', 'user-Agent'])
+        self.assertEqual(frozenset(i[0] for i in cid.items()), keyset)
+        self.assertEqual(frozenset(cid.keys()), keyset)
+        self.assertEqual(frozenset(cid), keyset)
+
+    def test_preserve_last_key_case(self):
+        cid = CaseInsensitiveDict({
+            'Accept': 'application/json',
+            'user-Agent': 'requests',
+        })
+        cid.update({'ACCEPT': 'application/json'})
+        cid['USER-AGENT'] = 'requests'
+        keyset = frozenset(['ACCEPT', 'USER-AGENT'])
+        self.assertEqual(frozenset(i[0] for i in cid.items()), keyset)
+        self.assertEqual(frozenset(cid.keys()), keyset)
+        self.assertEqual(frozenset(cid), keyset)
+
+
+class UtilsTestCase(unittest.TestCase):
+
+    def test_super_len_io_streams(self):
+        """ Ensures that we properly deal with different kinds of IO streams. """
+        # uses StringIO or io.StringIO (see import above)
+        from io import BytesIO
+        from requests.utils import super_len
+
+        self.assertEqual(super_len(StringIO.StringIO()), 0)
+        self.assertEqual(super_len(StringIO.StringIO('with so much drama in the LBC')), 29)
+
+        self.assertEqual(super_len(BytesIO()), 0)
+        self.assertEqual(super_len(BytesIO(b"it's kinda hard bein' snoop d-o-double-g")), 40)
+
+        try:
+            import cStringIO
+        except ImportError:
+            pass
+        else:
+            self.assertEqual(super_len(cStringIO.StringIO('but some how, some way...')), 25)
 
 if __name__ == '__main__':
     unittest.main()

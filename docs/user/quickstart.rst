@@ -68,8 +68,11 @@ following code::
 
 You can see that the URL has been correctly encoded by printing the URL::
 
-    >>> print r.url
-    u'http://httpbin.org/get?key2=value2&key1=value1'
+    >>> print(r.url)
+    http://httpbin.org/get?key2=value2&key1=value1
+
+Note that any dictionary key whose value is ``None`` will not be added to the
+URL's query string.
 
 
 Response Content
@@ -81,7 +84,7 @@ again::
     >>> import requests
     >>> r = requests.get('https://github.com/timeline.json')
     >>> r.text
-    '[{"repository":{"open_issues":0,"url":"https://github.com/...
+    u'[{"repository":{"open_issues":0,"url":"https://github.com/...
 
 Requests will automatically decode content from the server. Most unicode
 charsets are seamlessly decoded.
@@ -114,7 +117,7 @@ You can also access the response body as bytes, for non-text requests::
 The ``gzip`` and ``deflate`` transfer-encodings are automatically decoded for you.
 
 For example, to create an image from binary data returned by a request, you can
-use the following code:
+use the following code::
 
     >>> from PIL import Image
     >>> from StringIO import StringIO
@@ -149,6 +152,18 @@ server, you can access ``r.raw``. If you want to do this, make sure you set
     >>> r.raw.read(10)
     '\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03'
 
+In general, however, you should use a pattern like this to save what is being 
+streamed to a file::
+
+    with open(filename, 'wb') as fd:
+        for chunk in r.iter_content(chunk_size):
+            fd.write(chunk)
+
+Using ``Response.iter_content`` will handle a lot of what you would otherwise 
+have to handle when using ``Response.raw`` directly. When streaming a 
+download, the above is the preferred and recommended way to retrieve the 
+content.
+
 
 Custom Headers
 --------------
@@ -170,7 +185,7 @@ More complicated POST requests
 ------------------------------
 
 Typically, you want to send some form-encoded data — much like an HTML form.
-To do this, simply pass a dictionary to the `data` argument. Your
+To do this, simply pass a dictionary to the ``data`` argument. Your
 dictionary of data will automatically be form-encoded when the request is made::
 
     >>> payload = {'key1': 'value1', 'key2': 'value2'}
@@ -260,7 +275,7 @@ reference::
     >>> r.status_code == requests.codes.ok
     True
 
-If we made a bad request (non-200 response), we can raise it with
+If we made a bad request (a 4XX client error or 5XX server error response), we can raise it with
 :class:`Response.raise_for_status()`::
 
     >>> bad_r = requests.get('http://httpbin.org/status/404')
@@ -295,7 +310,7 @@ We can view the server's response headers using a Python dictionary::
         'server': 'nginx/1.0.4',
         'x-runtime': '148ms',
         'etag': '"e1ca502697e5c9317743dc078f67693f"',
-        'content-type': 'application/json; charset=utf-8'
+        'content-type': 'application/json'
     }
 
 The dictionary is special, though: it's made just for HTTP headers. According to
@@ -305,15 +320,10 @@ Headers are case-insensitive.
 So, we can access the headers using any capitalization we want::
 
     >>> r.headers['Content-Type']
-    'application/json; charset=utf-8'
+    'application/json'
 
     >>> r.headers.get('content-type')
-    'application/json; charset=utf-8'
-
-If a header doesn't exist in the Response, its value defaults to ``None``::
-
-    >>> r.headers['X-Random']
-    None
+    'application/json'
 
 
 Cookies
@@ -341,11 +351,11 @@ parameter::
 Redirection and History
 -----------------------
 
-Requests will automatically perform location redirection while using the GET
-and OPTIONS verbs.
+Requests will automatically perform location redirection for all verbs except
+HEAD.
 
 GitHub redirects all HTTP requests to HTTPS. We can use the ``history`` method
-of the Response object to track redirection. Let's see what Github does::
+of the Response object to track redirection. Let's see what GitHub does::
 
     >>> r = requests.get('http://github.com')
     >>> r.url
@@ -355,11 +365,12 @@ of the Response object to track redirection. Let's see what Github does::
     >>> r.history
     [<Response [301]>]
 
-The :class:`Response.history` list contains a list of the
-:class:`Request` objects that were created in order to complete the request. The list is sorted from the oldest to the most recent request.
+The :class:`Response.history` list contains the :class:`Request` objects that
+were created in order to complete the request. The list is sorted from the
+oldest to the most recent request.
 
-If you're using GET or OPTIONS, you can disable redirection handling with the
-``allow_redirects`` parameter::
+If you're using GET, OPTIONS, POST, PUT, PATCH or DELETE, you can disable
+redirection handling with the ``allow_redirects`` parameter::
 
     >>> r = requests.get('http://github.com', allow_redirects=False)
     >>> r.status_code
@@ -367,8 +378,7 @@ If you're using GET or OPTIONS, you can disable redirection handling with the
     >>> r.history
     []
 
-If you're using POST, PUT, PATCH, DELETE or HEAD, you can enable
-redirection as well::
+If you're using HEAD, you can enable redirection as well::
 
     >>> r = requests.post('http://github.com', allow_redirects=True)
     >>> r.url
@@ -380,7 +390,7 @@ redirection as well::
 Timeouts
 --------
 
-You can tell requests to stop waiting for a response after a given number of
+You can tell Requests to stop waiting for a response after a given number of
 seconds with the ``timeout`` parameter::
 
     >>> requests.get('http://github.com', timeout=0.001)
@@ -389,25 +399,28 @@ seconds with the ``timeout`` parameter::
     requests.exceptions.Timeout: HTTPConnectionPool(host='github.com', port=80): Request timed out. (timeout=0.001)
 
 
-.. admonition:: Note:
+.. admonition:: Note
 
-    ``timeout`` only effects the connection process itself, not the
-    downloading of the response body.
+    ``timeout`` is not a time limit on the entire response download;
+    rather, an exception is raised if the server has not issued a
+    response for ``timeout`` seconds (more precisely, if no bytes have been
+    received on the underlying socket for ``timeout`` seconds).
 
 
 Errors and Exceptions
 ---------------------
 
 In the event of a network problem (e.g. DNS failure, refused connection, etc),
-Requests will raise a :class:`ConnectionError` exception.
+Requests will raise a :class:`~requests.exceptions.ConnectionError` exception.
 
-In the event of the rare invalid HTTP response, Requests will raise
-an  :class:`HTTPError` exception.
+In the event of the rare invalid HTTP response, Requests will raise an
+:class:`~requests.exceptions.HTTPError` exception.
 
-If a request times out, a :class:`Timeout` exception is raised.
+If a request times out, a :class:`~requests.exceptions.Timeout` exception is
+raised.
 
 If a request exceeds the configured number of maximum redirections, a
-:class:`TooManyRedirects` exception is raised.
+:class:`~requests.exceptions.TooManyRedirects` exception is raised.
 
 All exceptions that Requests explicitly raises inherit from
 :class:`requests.exceptions.RequestException`.

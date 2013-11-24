@@ -13,7 +13,7 @@ The Session object allows you to persist certain parameters across
 requests. It also persists cookies across all requests made from the
 Session instance.
 
-A session object has all the methods of the main Requests API.
+A Session object has all the methods of the main Requests API.
 
 Let's persist some cookies across requests::
 
@@ -22,12 +22,12 @@ Let's persist some cookies across requests::
     s.get('http://httpbin.org/cookies/set/sessioncookie/123456789')
     r = s.get("http://httpbin.org/cookies")
 
-    print r.text
+    print(r.text)
     # '{"cookies": {"sessioncookie": "123456789"}}'
 
 
 Sessions can also be used to provide default data to the request methods. This
-is done by providing data to the properties on a session object::
+is done by providing data to the properties on a Session object::
 
     s = requests.Session()
     s.auth = ('user', 'pass')
@@ -48,13 +48,13 @@ All values that are contained within a session are directly available to you. Se
 Request and Response Objects
 ----------------------------
 
-Whenever a call is made to requests.*() you are doing two major things. First,
-you are constructing a ``Request`` object which will be sent of to a server
-to request or query some resource. Second, a ``Response`` object is generated
-once ``requests`` gets a response back from the server. The response object
-contains all of the information returned by the server and also contains the
-``Request`` object you created originally. Here is a simple request to get some
-very important information from Wikipedia's servers::
+Whenever a call is made to ``requests.get()`` and friends you are doing two
+major things. First, you are constructing a ``Request`` object which will be
+sent off to a server to request or query some resource. Second, a ``Response``
+object is generated once ``requests`` gets a response back from the server.
+The Response object contains all of the information returned by the server and
+also contains the ``Request`` object you created originally. Here is a simple
+request to get some very important information from Wikipedia's servers::
 
     >>> r = requests.get('http://en.wikipedia.org/wiki/Monty_Python')
 
@@ -120,7 +120,7 @@ Requests can verify SSL certificates for HTTPS requests, just like a web browser
     >>> requests.get('https://kennethreitz.com', verify=True)
     requests.exceptions.SSLError: hostname 'kennethreitz.com' doesn't match either of '*.herokuapp.com', 'herokuapp.com'
 
-I don't have SSL setup on this domain, so it fails. Excellent. Github does though::
+I don't have SSL setup on this domain, so it fails. Excellent. GitHub does though::
 
     >>> requests.get('https://github.com', verify=True)
     <Response [200]>
@@ -161,7 +161,7 @@ At this point only the response headers have been downloaded and the connection 
       content = r.content
       ...
 
-You can further control the workflow by use of the :class:`Response.iter_content` and :class:`Response.iter_lines` methods, or reading from the underlying urllib3 :class:`urllib3.HTTPResponse` at :class:`Response.raw`.
+You can further control the workflow by use of the :class:`Response.iter_content` and :class:`Response.iter_lines` methods. Alternatively, you can read the undecoded body from the underlying urllib3 :class:`urllib3.HTTPResponse` at :class:`Response.raw`.
 
 
 Keep-Alive
@@ -217,7 +217,7 @@ argument.
 
 ::
 
-    def print_url(r):
+    def print_url(r, *args, **kwargs):
         print(r.url)
 
 If an error occurs while executing your callback, a warning is given.
@@ -268,18 +268,19 @@ Then, we can make a request using our Pizza Auth::
     >>> requests.get('http://pizzabin.org/admin', auth=PizzaAuth('kenneth'))
     <Response [200]>
 
+.. _streaming-requests
+
 Streaming Requests
 ------------------
 
 With ``requests.Response.iter_lines()`` you can easily iterate over streaming
 APIs such as the `Twitter Streaming API <https://dev.twitter.com/docs/streaming-api>`_.
-
-To use the Twitter Streaming API to track the keyword "requests"::
+Simply set ``stream`` to ``True`` and iterate over the response with ``iter_lines()``::
 
     import json
     import requests
 
-    r = requests.post('http://httpbin.org/stream/20', stream=True)
+    r = requests.get('http://httpbin.org/stream/20', stream=True)
 
     for line in r.iter_lines():
 
@@ -303,7 +304,8 @@ If you need to use a proxy, you can configure individual requests with the
 
     requests.get("http://example.org", proxies=proxies)
 
-You can also configure proxies by environment variables ``HTTP_PROXY`` and ``HTTPS_PROXY``.
+You can also configure proxies by setting the environment variables
+``HTTP_PROXY`` and ``HTTPS_PROXY``.
 
 ::
 
@@ -318,6 +320,8 @@ To use HTTP Basic Auth with your proxy, use the `http://user:password@host/` syn
     proxies = {
         "http": "http://user:pass@10.10.1.10:3128/",
     }
+
+Note that proxy URLs must include the scheme.
 
 Compliance
 ----------
@@ -574,3 +578,19 @@ a good start would be to subclass the ``requests.adapters.BaseAdapter`` class.
 .. _`described here`: http://kennethreitz.org/exposures/the-future-of-python-http
 .. _`urllib3`: https://github.com/shazow/urllib3
 
+Blocking Or Non-Blocking?
+-------------------------
+
+With the default Transport Adapter in place, Requests does not provide any kind
+of non-blocking IO. The ``Response.content`` property will block until the
+entire response has been downloaded. If you require more granularity, the
+streaming features of the library (see :ref:`streaming-requests`) allow you to
+retrieve smaller quantities of the response at a time. However, these calls
+will still block.
+
+If you are concerned about the use of blocking IO, there are lots of projects
+out there that combine Requests with one of Python's asynchronicity frameworks.
+Two excellent examples are `grequests`_ and `requests-futures`_.
+
+.. _`grequests`: https://github.com/kennethreitz/grequests
+.. _`requests-futures`: https://github.com/ross/requests-futures
