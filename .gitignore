@@ -5,6 +5,7 @@ nosetests.xml
 junit-report.xml
 pylint.txt
 toy.py
+tox.ini
 violations.pyflakes.txt
 cover/
 build/
@@ -20,3 +21,4 @@ env/
 t.py
 
 t2.py
+dist
